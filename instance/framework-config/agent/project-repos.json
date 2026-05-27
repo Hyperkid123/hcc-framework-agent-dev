@@ -120,5 +120,49 @@
   "insights-rbac": {
     "url": "https://github.com/platex-rehor-bot/insights-rbac.git",
     "upstream": "https://github.com/RedHatInsights/insights-rbac.git"
+  },
+  "access-requests-frontend": {
+    "url": "https://github.com/platex-rehor-bot/access-requests-frontend.git",
+    "upstream": "https://github.com/RedHatInsights/access-requests-frontend.git"
+  },
+  "api-documentation-frontend": {
+    "url": "https://github.com/platex-rehor-bot/api-documentation-frontend.git",
+    "upstream": "https://github.com/RedHatInsights/api-documentation-frontend.git"
+  },
+  "api-frontend": {
+    "url": "https://github.com/platex-rehor-bot/api-frontend.git",
+    "upstream": "https://github.com/RedHatInsights/api-frontend.git"
+  },
+  "insights-rbac-ui": {
+    "url": "https://github.com/platex-rehor-bot/insights-rbac-ui.git",
+    "upstream": "https://github.com/RedHatInsights/insights-rbac-ui.git"
+  },
+  "landing-page-frontend": {
+    "url": "https://github.com/platex-rehor-bot/landing-page-frontend.git",
+    "upstream": "https://github.com/RedHatInsights/landing-page-frontend.git"
+  },
+  "notifications-frontend": {
+    "url": "https://github.com/platex-rehor-bot/notifications-frontend.git",
+    "upstream": "https://github.com/RedHatInsights/notifications-frontend.git"
+  },
+  "payload-tracker-frontend": {
+    "url": "https://github.com/platex-rehor-bot/payload-tracker-frontend.git",
+    "upstream": "https://github.com/RedHatInsights/payload-tracker-frontend.git"
+  },
+  "sources-ui": {
+    "url": "https://github.com/platex-rehor-bot/sources-ui.git",
+    "upstream": "https://github.com/RedHatInsights/sources-ui.git"
+  },
+  "subscriptions-dashboard-ui": {
+    "url": "https://github.com/platex-rehor-bot/subscriptions-dashboard-ui.git",
+    "upstream": "https://github.com/RedHatInsights/subscriptions-dashboard-ui.git"
+  },
+  "user-preferences-frontend": {
+    "url": "https://github.com/platex-rehor-bot/user-preferences-frontend.git",
+    "upstream": "https://github.com/RedHatInsights/user-preferences-frontend.git"
+  },
+  "insights-common-typescript": {
+    "url": "https://github.com/platex-rehor-bot/insights-common-typescript.git",
+    "upstream": "https://github.com/RedHatInsights/insights-common-typescript.git"
   }
 }
