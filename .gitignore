@@ -48,3 +48,5 @@ htmlcov/
 !README.md
 !CLAUDE.md
 !DEPLOYMENT.md
+!**/AGENTS.md
+!**/.opencode/agents/*.md
