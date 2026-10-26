@@ -24,9 +24,6 @@ def mock_common_module():
     mock_common.output_result = Mock()
     mock_common.get_capacity = Mock(return_value=(0, 10))
     mock_common.get_tasks = Mock(return_value=[])
-    mock_common.load_state = Mock(return_value={})
-    mock_common.save_state = Mock()
-
     sys.modules["common"] = mock_common
 
     yield mock_common
@@ -43,6 +40,40 @@ spec = importlib.util.spec_from_file_location(
     "check_merged_prs", Path(__file__).parent.parent / "01-check-merged-prs.py"
 )
 check_module = importlib.util.module_from_spec(spec)
+
+
+def make_gh_mock(list_response="[]", view_response=None):
+    """Return a mock subprocess.run that dispatches gh pr list/view calls."""
+
+    def mock_subprocess_run(cmd, **kwargs):
+        result = Mock()
+        result.returncode = 0
+
+        if "list" in cmd:
+            result.stdout = (
+                json.dumps(list_response)
+                if not isinstance(list_response, str)
+                else list_response
+            )
+        elif "view" in cmd:
+            result.stdout = (
+                json.dumps(view_response) if view_response is not None else "{}"
+            )
+
+        return result
+
+    return mock_subprocess_run
+
+
+def run_main(gh_mock, scan_config=None):
+    """Load the check module and run main() with patched subprocess and scan config."""
+    spec.loader.exec_module(check_module)
+
+    with (
+        patch("subprocess.run", side_effect=gh_mock),
+        patch.object(check_module, "load_config", return_value=scan_config),
+    ):
+        check_module.main()
 
 
 @pytest.fixture
@@ -224,32 +255,122 @@ class TestCheckPrViolations:
         assert "merged_at" in result
 
 
+class TestSecurityScanFiltering:
+    """Tests for security scan exclusion in check_pr_violations."""
+
+    def test_security_scan_excluded_from_violations(self, sample_pr_data):
+        """Security scan failures should not appear in failed_checks."""
+        spec.loader.exec_module(check_module)
+
+        status_checks = {
+            "statusCheckRollup": [
+                {"name": "ci/test", "conclusion": "FAILURE", "detailsUrl": "url1"},
+                {"name": "clair-scan", "conclusion": "FAILURE", "detailsUrl": "url2"},
+            ]
+        }
+
+        mock_result = Mock()
+        mock_result.returncode = 0
+        mock_result.stdout = json.dumps(status_checks)
+
+        with patch("subprocess.run", return_value=mock_result):
+            result = check_module.check_pr_violations(
+                "RedHatInsights/test-repo", 123, sample_pr_data
+            )
+
+        assert result is not None
+        failed_names = {c["name"] for c in result["failed_checks"]}
+        assert "ci/test" in failed_names
+        assert "clair-scan" not in failed_names
+        assert len(result["excluded_security_scans"]) == 1
+        assert result["excluded_security_scans"][0]["name"] == "clair-scan"
+
+    def test_only_security_scan_failures_no_violation(self, sample_pr_data):
+        """When only security scans fail, no violation should be reported."""
+        spec.loader.exec_module(check_module)
+
+        status_checks = {
+            "statusCheckRollup": [
+                {"name": "clair-scan", "conclusion": "FAILURE", "detailsUrl": "url1"},
+                {
+                    "name": "sast-snyk-check",
+                    "conclusion": "FAILURE",
+                    "detailsUrl": "url2",
+                },
+            ]
+        }
+
+        mock_result = Mock()
+        mock_result.returncode = 0
+        mock_result.stdout = json.dumps(status_checks)
+
+        with patch("subprocess.run", return_value=mock_result):
+            result = check_module.check_pr_violations(
+                "RedHatInsights/test-repo", 123, sample_pr_data
+            )
+
+        assert result is None
+
+    def test_mixed_failures_only_ci_in_violation(self, sample_pr_data):
+        """Mix of CI and security scan failures should only include CI checks."""
+        spec.loader.exec_module(check_module)
+
+        status_checks = {
+            "statusCheckRollup": [
+                {"name": "ci/lint", "conclusion": "FAILURE", "detailsUrl": "url1"},
+                {"name": "ci/build", "conclusion": "FAILURE", "detailsUrl": "url2"},
+                {
+                    "name": "grype-vulnerability-scan",
+                    "conclusion": "FAILURE",
+                    "detailsUrl": "url3",
+                },
+                {"name": "trivy-scan", "conclusion": "FAILURE", "detailsUrl": "url4"},
+            ]
+        }
+
+        mock_result = Mock()
+        mock_result.returncode = 0
+        mock_result.stdout = json.dumps(status_checks)
+
+        with patch("subprocess.run", return_value=mock_result):
+            result = check_module.check_pr_violations(
+                "RedHatInsights/test-repo", 123, sample_pr_data
+            )
+
+        assert result is not None
+        failed_names = {c["name"] for c in result["failed_checks"]}
+        assert failed_names == {"ci/lint", "ci/build"}
+        assert len(result["excluded_security_scans"]) == 2
+
+    def test_no_security_scans_unchanged(self, sample_pr_data):
+        """When no security scans are present, behavior is unchanged."""
+        spec.loader.exec_module(check_module)
+
+        status_checks = {
+            "statusCheckRollup": [
+                {"name": "ci/lint", "conclusion": "FAILURE", "detailsUrl": "url1"},
+            ]
+        }
+
+        mock_result = Mock()
+        mock_result.returncode = 0
+        mock_result.stdout = json.dumps(status_checks)
+
+        with patch("subprocess.run", return_value=mock_result):
+            result = check_module.check_pr_violations(
+                "RedHatInsights/test-repo", 123, sample_pr_data
+            )
+
+        assert result is not None
+        assert len(result["failed_checks"]) == 1
+        assert "excluded_security_scans" not in result
+
+
 class TestMainFunction:
     """Integration tests for main() function."""
 
-    def test_skips_when_scanned_recently(self, mock_common_module):
-        """Skips scan if scanned within last 23 hours."""
-        from datetime import timezone
-
-        # Simulate scan 22 hours ago
-        recent_scan = datetime.now(timezone.utc) - timedelta(hours=22)
-        mock_common_module.load_state.return_value = {
-            "last_merge_check_timestamp": recent_scan.isoformat()
-        }
-
-        spec.loader.exec_module(check_module)
-        check_module.main()
-
-        mock_common_module.output_result.assert_called_once()
-        call_args = mock_common_module.output_result.call_args[0]
-        assert call_args[0] == "skip"
-        assert "22" in call_args[1] or "ago" in call_args[1]
-
-    def test_runs_when_no_previous_timestamp(self, mock_common_module):
-        """Runs scan on first execution when no timestamp exists."""
-        from datetime import timezone
-
-        mock_common_module.load_state.return_value = {}
+    def test_scans_with_no_repos(self, mock_common_module):
+        """Scans and skips when no repos have violations."""
         mock_common_module.get_capacity.return_value = (0, 10)
         mock_common_module.get_tasks.return_value = []
         mock_common_module.load_project_repos.return_value = {}
@@ -257,89 +378,12 @@ class TestMainFunction:
         spec.loader.exec_module(check_module)
         check_module.main()
 
-        # Should not skip due to missing timestamp
-        mock_common_module.output_result.assert_called_once()
-        call_args = mock_common_module.output_result.call_args[0]
-        # Will skip with "no violations" message, not timestamp message
-        assert call_args[0] == "skip"
-        assert "ago" not in call_args[1]  # No timestamp-related skip
-
-    def test_runs_when_scan_is_old_enough(self, mock_common_module):
-        """Runs scan when previous scan was >23 hours ago."""
-        from datetime import timezone
-
-        # Simulate scan 24 hours ago
-        old_scan = datetime.now(timezone.utc) - timedelta(hours=24)
-        mock_common_module.load_state.return_value = {
-            "last_merge_check_timestamp": old_scan.isoformat()
-        }
-        mock_common_module.get_capacity.return_value = (0, 10)
-        mock_common_module.get_tasks.return_value = []
-        mock_common_module.load_project_repos.return_value = {}
-
-        spec.loader.exec_module(check_module)
-        check_module.main()
-
-        # Should proceed with scan, not skip due to timestamp
         mock_common_module.output_result.assert_called_once()
         call_args = mock_common_module.output_result.call_args[0]
         assert call_args[0] == "skip"
-        assert "ago" not in call_args[1]  # Should proceed past timestamp check
-
-    def test_handles_invalid_timestamp_format(self, mock_common_module):
-        """Proceeds with scan when timestamp format is invalid."""
-        mock_common_module.load_state.return_value = {
-            "last_merge_check_timestamp": "invalid-timestamp"
-        }
-        mock_common_module.get_capacity.return_value = (0, 10)
-        mock_common_module.get_tasks.return_value = []
-        mock_common_module.load_project_repos.return_value = {}
-
-        spec.loader.exec_module(check_module)
-        check_module.main()
-
-        # Should proceed with scan despite invalid timestamp
-        mock_common_module.output_result.assert_called_once()
-        call_args = mock_common_module.output_result.call_args[0]
-        assert call_args[0] == "skip"
-
-    def test_saves_timestamp_after_scan(self, mock_common_module):
-        """Saves ISO timestamp after successful scan."""
-        from datetime import timezone
-
-        mock_common_module.load_state.return_value = {}
-        mock_common_module.get_capacity.return_value = (0, 10)
-        mock_common_module.get_tasks.return_value = []
-        mock_common_module.load_project_repos.return_value = {
-            "test-repo": {"upstream": "https://github.com/RedHatInsights/test-repo"}
-        }
-        mock_common_module.upstream_repo.return_value = (
-            "RedHatInsights/test-repo",
-            "github",
-        )
-
-        # Mock gh response with no violations
-        def mock_subprocess_run(cmd, **kwargs):
-            result = Mock()
-            result.returncode = 0
-            result.stdout = "[]"
-            return result
-
-        spec.loader.exec_module(check_module)
-
-        with patch("subprocess.run", side_effect=mock_subprocess_run):
-            check_module.main()
-
-        # Verify timestamp was saved
-        mock_common_module.save_state.assert_called_once()
-        saved_state = mock_common_module.save_state.call_args[0][0]
-        assert "last_merge_check_timestamp" in saved_state
-        # Verify it's a valid ISO format timestamp
-        datetime.fromisoformat(saved_state["last_merge_check_timestamp"])
 
     def test_skips_at_capacity(self, mock_common_module):
         """Skips scan when at capacity."""
-        mock_common_module.load_state.return_value = {}
         mock_common_module.get_capacity.return_value = (10, 10)
 
         spec.loader.exec_module(check_module)
@@ -352,7 +396,6 @@ class TestMainFunction:
 
     def test_skips_when_too_many_violations(self, mock_common_module):
         """Skips when already processing too many violations."""
-        mock_common_module.load_state.return_value = {}
         mock_common_module.get_capacity.return_value = (0, 10)
 
         # Mock 5 active violation tasks
@@ -371,7 +414,6 @@ class TestMainFunction:
 
     def test_processes_violations(self, mock_common_module):
         """Processes violations and generates output."""
-        mock_common_module.load_state.return_value = {}
         mock_common_module.get_capacity.return_value = (0, 10)
         mock_common_module.get_tasks.return_value = []
         mock_common_module.load_project_repos.return_value = {
@@ -405,21 +447,7 @@ class TestMainFunction:
             ]
         }
 
-        def mock_subprocess_run(cmd, **kwargs):
-            result = Mock()
-            result.returncode = 0
-
-            if "list" in cmd:
-                result.stdout = json.dumps(pr_list_response)
-            elif "view" in cmd:
-                result.stdout = json.dumps(pr_view_response)
-
-            return result
-
-        spec.loader.exec_module(check_module)
-
-        with patch("subprocess.run", side_effect=mock_subprocess_run):
-            check_module.main()
+        run_main(make_gh_mock(pr_list_response, pr_view_response))
 
         # Verify output was called with violations
         mock_common_module.output_result.assert_called_once()
@@ -427,12 +455,8 @@ class TestMainFunction:
         assert call_args[0] == "start"
         assert "violation" in call_args[1].lower()
 
-        # Verify state was saved
-        mock_common_module.save_state.assert_called_once()
-
     def test_skips_non_github_repos(self, mock_common_module):
         """Skips repositories not hosted on GitHub."""
-        mock_common_module.load_state.return_value = {}
         mock_common_module.get_capacity.return_value = (0, 10)
         mock_common_module.load_project_repos.return_value = {
             "gitlab-repo": {"upstream": "https://gitlab.com/test/repo"}
@@ -451,10 +475,9 @@ class TestMainFunction:
         assert call_args[0] == "skip"
 
     def test_filters_by_scan_window(self, mock_common_module):
-        """Only processes PRs merged since last scan (or default window on first run)."""
+        """Only processes PRs merged within the 24-hour lookback window."""
         from datetime import timezone
 
-        mock_common_module.load_state.return_value = {}
         mock_common_module.get_capacity.return_value = (0, 10)
         mock_common_module.load_project_repos.return_value = {
             "test-repo": {"upstream": "https://github.com/RedHatInsights/test-repo"}
@@ -495,28 +518,126 @@ class TestMainFunction:
             ]
         }
 
-        call_count = 0
+        view_call_count = 0
 
         def mock_subprocess_run(cmd, **kwargs):
-            nonlocal call_count
+            nonlocal view_call_count
             result = Mock()
             result.returncode = 0
 
             if "list" in cmd:
                 result.stdout = json.dumps(pr_list_response)
             elif "view" in cmd:
-                call_count += 1
+                view_call_count += 1
                 result.stdout = json.dumps(violations_response)
 
             return result
 
-        spec.loader.exec_module(check_module)
-
-        with patch("subprocess.run", side_effect=mock_subprocess_run):
-            check_module.main()
+        run_main(mock_subprocess_run)
 
         # Should only check the recent PR (within default scan window)
-        assert call_count == 1
+        assert view_call_count == 1
+
+
+class TestScanOnlyReposFilter:
+    """Tests for scan_only_repos whitelist filtering."""
+
+    def test_filters_repos_to_whitelist(self, mock_common_module):
+        """Only scans repos listed in scan_only_repos."""
+        mock_common_module.get_capacity.return_value = (0, 10)
+        mock_common_module.get_tasks.return_value = []
+        mock_common_module.load_project_repos.return_value = {
+            "insights-chrome": {
+                "upstream": "https://github.com/RedHatInsights/insights-chrome"
+            },
+            "insights-inventory-frontend": {
+                "upstream": "https://github.com/RedHatInsights/insights-inventory-frontend"
+            },
+            "landing-page-frontend": {
+                "upstream": "https://github.com/RedHatInsights/landing-page-frontend"
+            },
+        }
+
+        def upstream_side_effect(repo_name):
+            return (f"RedHatInsights/{repo_name}", "github")
+
+        mock_common_module.upstream_repo.side_effect = upstream_side_effect
+
+        scanned_repos = []
+
+        def mock_subprocess_run(cmd, **kwargs):
+            result = Mock()
+            result.returncode = 0
+            if "list" in cmd:
+                repo_flag_idx = cmd.index("--repo") + 1
+                scanned_repos.append(cmd[repo_flag_idx])
+                result.stdout = "[]"
+            else:
+                result.stdout = "[]"
+            return result
+
+        scan_config = {
+            "scan_only_repos": ["insights-chrome", "landing-page-frontend"],
+        }
+
+        run_main(mock_subprocess_run, scan_config)
+
+        assert "RedHatInsights/insights-chrome" in scanned_repos
+        assert "RedHatInsights/landing-page-frontend" in scanned_repos
+        assert "RedHatInsights/insights-inventory-frontend" not in scanned_repos
+
+    def test_scans_all_repos_when_no_config(self, mock_common_module):
+        """Scans all repos when test-config.yaml is missing."""
+        mock_common_module.get_capacity.return_value = (0, 10)
+        mock_common_module.get_tasks.return_value = []
+        mock_common_module.load_project_repos.return_value = {
+            "repo-a": {"upstream": "https://github.com/Org/repo-a"},
+            "repo-b": {"upstream": "https://github.com/Org/repo-b"},
+        }
+
+        def upstream_side_effect(repo_name):
+            return (f"Org/{repo_name}", "github")
+
+        mock_common_module.upstream_repo.side_effect = upstream_side_effect
+
+        scanned_repos = []
+
+        def mock_subprocess_run(cmd, **kwargs):
+            result = Mock()
+            result.returncode = 0
+            if "list" in cmd:
+                repo_flag_idx = cmd.index("--repo") + 1
+                scanned_repos.append(cmd[repo_flag_idx])
+                result.stdout = "[]"
+            else:
+                result.stdout = "[]"
+            return result
+
+        run_main(mock_subprocess_run)
+
+        assert len(scanned_repos) == 2
+
+    def test_skips_when_whitelist_matches_no_repos(self, mock_common_module):
+        """Skips with message when scan_only_repos matches nothing."""
+        mock_common_module.get_capacity.return_value = (0, 10)
+        mock_common_module.get_tasks.return_value = []
+        mock_common_module.load_project_repos.return_value = {
+            "repo-a": {"upstream": "https://github.com/Org/repo-a"},
+        }
+
+        scan_config = {
+            "scan_only_repos": ["nonexistent-repo"],
+        }
+
+        spec.loader.exec_module(check_module)
+
+        with patch.object(check_module, "load_config", return_value=scan_config):
+            check_module.main()
+
+        mock_common_module.output_result.assert_called_once()
+        call_args = mock_common_module.output_result.call_args[0]
+        assert call_args[0] == "skip"
+        assert "scan_only_repos" in call_args[1]
 
 
 class TestSeverityAssessment:
@@ -526,7 +647,6 @@ class TestSeverityAssessment:
         """FAILURE conclusions are marked as HIGH severity."""
         from datetime import timezone
 
-        mock_common_module.load_state.return_value = {}
         mock_common_module.get_capacity.return_value = (0, 10)
         mock_common_module.load_project_repos.return_value = {
             "test-repo": {"upstream": "https://github.com/RedHatInsights/test-repo"}
@@ -550,21 +670,7 @@ class TestSeverityAssessment:
             ]
         }
 
-        def mock_subprocess_run(cmd, **kwargs):
-            result = Mock()
-            result.returncode = 0
-
-            if "list" in cmd:
-                result.stdout = json.dumps(pr_list_response)
-            elif "view" in cmd:
-                result.stdout = json.dumps(pr_view_response)
-
-            return result
-
-        spec.loader.exec_module(check_module)
-
-        with patch("subprocess.run", side_effect=mock_subprocess_run):
-            check_module.main()
+        run_main(make_gh_mock(pr_list_response, pr_view_response))
 
         call_args = mock_common_module.output_result.call_args[0]
         # Check for lowercase "high:" in new compact format
@@ -574,7 +680,6 @@ class TestSeverityAssessment:
         """CANCELLED conclusions are now tolerated and ignored."""
         from datetime import timezone
 
-        mock_common_module.load_state.return_value = {}
         mock_common_module.get_capacity.return_value = (0, 10)
         mock_common_module.load_project_repos.return_value = {
             "test-repo": {"upstream": "https://github.com/RedHatInsights/test-repo"}
@@ -598,25 +703,32 @@ class TestSeverityAssessment:
             ]
         }
 
-        def mock_subprocess_run(cmd, **kwargs):
-            result = Mock()
-            result.returncode = 0
-
-            if "list" in cmd:
-                result.stdout = json.dumps(pr_list_response)
-            elif "view" in cmd:
-                result.stdout = json.dumps(pr_view_response)
-
-            return result
-
-        spec.loader.exec_module(check_module)
-
-        with patch("subprocess.run", side_effect=mock_subprocess_run):
-            check_module.main()
+        run_main(make_gh_mock(pr_list_response, pr_view_response))
 
         call_args = mock_common_module.output_result.call_args[0]
         # CANCELLED checks are now tolerated, so should skip
         assert "No merged PRs with failed checks since" in call_args[1]
+
+
+class TestLoadConfig:
+    """Tests for shared config loader."""
+
+    def test_returns_none_on_missing_file(self, tmp_path):
+        """Returns None when config file doesn't exist."""
+        from lib import config
+
+        with patch.object(config, "CONFIG_PATH", tmp_path / "nonexistent.yaml"):
+            assert config.load_config() is None
+
+    def test_returns_none_on_invalid_yaml(self, tmp_path):
+        """Returns None when config file contains invalid YAML."""
+        from lib import config
+
+        bad_file = tmp_path / "bad.yaml"
+        bad_file.write_text(":\n  - :\n  bad: [unterminated")
+
+        with patch.object(config, "CONFIG_PATH", bad_file):
+            assert config.load_config() is None
 
 
 if __name__ == "__main__":

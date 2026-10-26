@@ -108,9 +108,18 @@
     "url": "https://github.com/platex-rehor-bot/user-preferences-frontend.git",
     "upstream": "https://github.com/RedHatInsights/user-preferences-frontend.git"
   },
+  "konflux-pipelines": {
+    "url": "https://github.com/platex-rehor-bot/konflux-pipelines.git",
+    "upstream": "https://github.com/RedHatInsights/konflux-pipelines.git"
+  },
   "caddy-ubi": {
     "url": "https://gitlab.cee.redhat.com/platform-experience-services-bot/caddy-ubi.git",
     "upstream": "https://gitlab.cee.redhat.com/insights-platform/caddy-ubi.git",
+    "host": "gitlab"
+  },
+  "konflux": {
+    "url": "https://gitlab.cee.redhat.com/platform-experience-services-bot/konflux-release-data.git",
+    "upstream": "https://gitlab.cee.redhat.com/releng/konflux-release-data.git",
     "host": "gitlab"
   },
   "unleash-proxy": {
@@ -190,6 +199,10 @@
     "url": "https://github.com/platex-rehor-bot/landing-page-frontend.git",
     "upstream": "https://github.com/RedHatInsights/landing-page-frontend.git"
   },
+  "lightwell-frontend": {
+    "url": "https://github.com/platex-rehor-bot/content-sources-frontend.git",
+    "upstream": "https://github.com/content-services/content-sources-frontend.git"
+  },
   "sources-ui": {
     "url": "https://github.com/platex-rehor-bot/sources-ui.git",
     "upstream": "https://github.com/RedHatInsights/sources-ui.git"
@@ -209,5 +222,13 @@
   "project-kessel/kessel-sdk-browser": {
     "url": "https://github.com/platex-rehor-bot/kessel-sdk-browser.git",
     "upstream": "https://github.com/project-kessel/kessel-sdk-browser.git"
+  },
+  "ai-web-clients": {
+    "url": "https://github.com/platex-rehor-bot/ai-web-clients.git",
+    "upstream": "https://github.com/RedHatInsights/ai-web-clients.git"
+  },
+  "frontend-experience-docs": {
+    "url": "https://github.com/platex-rehor-bot/frontend-experience-docs.git",
+    "upstream": "https://github.com/RedHatInsights/frontend-experience-docs.git"
   }
 }
