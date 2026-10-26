@@ -51,9 +51,12 @@ def test_framework_mcp_preparation_feeds_conflict_free_native_renderer_input(
         "command": "hcc-pf-mcp",
         "args": [],
     }
-    assert prepared_servers["chrome-devtools"] == json.loads(
-        (dev_bot / ".mcp.json").read_text()
-    )["mcpServers"]["chrome-devtools"]
+    assert (
+        prepared_servers["chrome-devtools"]
+        == json.loads((dev_bot / ".mcp.json").read_text())["mcpServers"][
+            "chrome-devtools"
+        ]
+    )
     assert {"hcc-patternfly-data-view", "chrome-devtools"}.issubset(optional_servers)
 
     # The renderer gets prepared_servers as openCodeMcpServers. Profile-native
